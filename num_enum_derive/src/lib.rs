@@ -40,6 +40,7 @@ pub fn derive_into_primitive(input: TokenStream) -> TokenStream {
     let name = &enum_info.name;
     let repr = &enum_info.repr;
 
+    #[cfg(not(feature = "const"))]
     let body = if let Some(catch_all_ident) = catch_all {
         quote! {
             match enum_value {
@@ -51,15 +52,44 @@ pub fn derive_into_primitive(input: TokenStream) -> TokenStream {
         quote! { enum_value as Self }
     };
 
-    TokenStream::from(quote! {
+    #[cfg(not(feature = "const"))]
+    return TokenStream::from(quote! {
         impl From<#name> for #repr {
             #[inline]
-            fn from (enum_value: #name) -> Self
-            {
+            fn from (enum_value: #name) -> Self {
                 #body
             }
         }
-    })
+    });
+
+    #[cfg(feature = "const")]
+    let into_body = if let Some(catch_all_ident) = catch_all {
+        quote! {
+            match self {
+                Self::#catch_all_ident(raw) => raw,
+                rest => unsafe { *(&rest as *const Self as *const #repr) }
+            }
+        }
+    } else {
+        quote! { self as #repr }
+    };
+
+    #[cfg(feature = "const")]
+    return TokenStream::from(quote! {
+        impl #name {
+            #[inline]
+            const fn const_into_primitive(self) -> #repr {
+                #into_body
+            }
+        }
+
+        impl From<#name> for #repr {
+            #[inline]
+            fn from (enum_value: #name) -> Self {
+                enum_value.const_into_primitive()
+            }
+        }
+    });
 }
 
 /// Implements `From<Primitive>` for a `#[repr(Primitive)] enum`.
@@ -123,7 +153,8 @@ pub fn derive_from_primitive(input: TokenStream) -> TokenStream {
 
     debug_assert_eq!(variant_idents.len(), variant_expressions.len());
 
-    TokenStream::from(quote! {
+    #[cfg(not(feature = "const"))]
+    let main_impl = quote! {
         impl ::#krate::FromPrimitive for #name {
             type Primitive = #repr;
 
@@ -147,6 +178,44 @@ pub fn derive_from_primitive(input: TokenStream) -> TokenStream {
                 }
             }
         }
+    };
+
+    #[cfg(feature = "const")]
+    let main_impl = quote! {
+        impl #name {
+            const fn const_from_primitive(number: #repr) -> Self {
+                // Use intermediate const(s) so that enums defined like
+                // `Two = ONE + 1u8` work properly.
+                #![allow(non_upper_case_globals)]
+                #(
+                    #(
+                        const #expression_idents: #repr = #variant_expressions;
+                    )*
+                )*
+                #[deny(unreachable_patterns)]
+                match number {
+                    #(
+                        #( #expression_idents )|*
+                        => Self::#variant_idents,
+                    )*
+                    #[allow(unreachable_patterns)]
+                    _ => #catch_all_body,
+                }
+            }
+        }
+
+        impl ::#krate::FromPrimitive for #name {
+            type Primitive = #repr;
+
+            fn from_primitive(number: Self::Primitive) -> Self {
+                Self::const_from_primitive(number)
+            }
+        }
+    };
+
+
+    TokenStream::from(quote! {
+        #main_impl
 
         impl ::core::convert::From<#repr> for #name {
             #[inline]

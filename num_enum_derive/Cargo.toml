@@ -24,9 +24,10 @@ proc-macro = true
 # See https://github.com/illicitonion/num_enum/issues/18
 std = ["proc-macro-crate"]
 complex-expressions = ["syn/full"]
+const = []
 external_doc = []
 
-default = ["std"]  # disable to use in a `no_std` environment
+default = ["std", "const"]  # disable to use in a `no_std` environment
 
 [package.metadata.docs.rs]
 features = ["external_doc"]
